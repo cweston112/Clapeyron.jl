@@ -1,5 +1,3 @@
-not_eos_error(model) = throw(ArgumentError("$model does not have eos defined "))
-
 """
     single_component_check(method,model)
 
@@ -84,4 +82,8 @@ function reference_state_checkempty(model,ref)
     if !has_reference_state(model)
         throw(ArgumentError("$model does not accept setting custom reference states."))
     end
+end
+
+function invalid_property_multiphase_error(f)
+    throw(DomainError(f,"$f cannot be used with multiphase conditions."))
 end

@@ -1,3 +1,4 @@
+ENV["JULIA_TEST_FAILFAST"] = "false"
 using Test
 t1 = @elapsed using Clapeyron
 using CoolProp #CoolProp ext
@@ -35,8 +36,20 @@ function GERG2008(components;verbose = false,reference_state = nothing)
 end
 
 function test_gibbs_duhem(model,V,T,z;rtol = 1e-14)
-    _,G,∑μᵢzᵢ = Clapeyron.gibbs_duhem(model,V,T,z)
-    @test G ≈ ∑μᵢzᵢ rtol = rtol
+    for i in (2.0,3.0,5.0,7.0,11.0)
+        a_res₀ = Clapeyron.a_res(model,V,T,z)
+        @test a_res₀ ≈ Clapeyron.a_res(model,i*V,T,i*z) rtol = rtol
+    end
+    pures = split_model(model)
+    x_pure = zeros(length(model))
+    for n in 1:length(model)
+        
+        for i in (2.0,3.0,5.0,7.0,11.0)
+            x_pure[n] = i
+            @test Clapeyron.a_res(model,i*V,T,x_pure) ≈ Clapeyron.a_res(pures[n],i*V,T,Clapeyron.SVector(i)) rtol = rtol
+            x_pure .= 0
+        end
+    end
 end
 
 function test_volume(model,p,T,z = Clapeyron.SA[1.0],rtol = 1e-8)
@@ -61,14 +74,14 @@ include_distributed("test_database.jl",4)
 include_distributed("test_solvers.jl",4)
 include_distributed("test_differentials.jl",4)
 include_distributed("test_misc.jl",4)
-include_distributed("test_models_saft_pc.jl",4)
+include_distributed("test_models_saft_pc.jl",1)
 include_distributed("test_models_cubic.jl",3)
 include_distributed("test_models_saft_others.jl",3)
 include_distributed("test_models_others.jl",2)
 include_distributed("test_models_saft_vr.jl",1)
 include_distributed("test_models_electrolytes.jl",1)
 include_distributed("test_methods_eos.jl",4)
-include_distributed("test_methods_api.jl",3)
+include_distributed("test_methods_api.jl",2)
 include_distributed("test_methods_electrolytes.jl",2)
 include_distributed("test_estimation.jl",1)
 include_distributed("test_issues.jl",4)

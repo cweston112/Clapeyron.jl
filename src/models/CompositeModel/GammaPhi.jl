@@ -9,15 +9,15 @@ struct GammaPhi{γ,Φ} <: RestrictedEquilibriaModel
     fluid::EoSVectorParam{Φ}
 end
 
-__gas_model(model::GammaPhi) = model.fluid
-
-function init_preferred_method(method::typeof(saturation_pressure),model::GammaPhi,kwargs)
-    return init_preferred_method(saturation_pressure,model.fluid,kwargs)
+function Base.show(io::IO,mime::MIME"text/plain",model::GammaPhi)
+    print(io,"γ-ϕ Model")
+    length(model) == 1 && print(io, " with 1 component:")
+    length(model) > 1 && print(io, " with ", length(model), " components:")
+    print(io,'\n'," Activity Model: ",model.activity)
+    print(io,'\n'," Fluid Model: ",model.fluid.model)
 end
 
-function init_preferred_method(method::typeof(saturation_temperature),model::GammaPhi,kwargs)
-    return init_preferred_method(saturation_temperature,model.fluid,kwargs)
-end
+fluid_model(model::GammaPhi) = model.fluid
 
 function activity_coefficient(model::GammaPhi,p,T,z=SA[1.];
                             μ_ref = nothing,
@@ -29,23 +29,17 @@ function activity_coefficient(model::GammaPhi,p,T,z=SA[1.];
     return activity_coefficient(model.activity,p,T,z;μ_ref,reference,phase,threaded,vol0)
 end
 
-reference_chemical_potential_type(model::GammaPhi) = reference_chemical_potential_type(model.activity)
-
-function saturation_pressure(model::GammaPhi,T,method::SaturationMethod)
-    return saturation_pressure(model.fluid,T,method)
+function excess_gibbs_free_energy(model::GammaPhi,p,T,z)
+    return excess_gibbs_free_energy(model.activity,p,T,z)
 end
+
+reference_chemical_potential_type(model::GammaPhi) = reference_chemical_potential_type(model.activity)
 
 function volume_impl(model::GammaPhi,p,T,z,phase,threaded,vol0)
     return volume_impl(model.fluid.model,p,T,z,phase,threaded,vol0)
 end
 
-crit_pure(model::GammaPhi) = crit_pure(model.fluid)
-x0_sat_pure(model::GammaPhi,T) = x0_sat_pure(model.fluid)
-x0_psat(model::GammaPhi,T) = x0_psat(model.fluid,T)
-
-function saturation_temperature(model::GammaPhi,p,method::SaturationMethod)
-    return saturation_temperature(model.fluid,p,method)
-end
+saturation_model(model::GammaPhi) = saturation_model(model.fluid)
 
 function init_preferred_method(method::typeof(tp_flash),model::GammaPhi,kwargs)
     RRTPFlash(;kwargs...)
@@ -64,6 +58,30 @@ function gibbs_solvation(model::GammaPhi,T)
     K = v_v/v_l*γ[2]*p2/p
     return -R̄*T*log(K)
 end
+idealmodel(model::GammaPhi) = idealmodel(model.fluid.model)
+reference_state(model::GammaPhi) = reference_state(model.fluid.model)
+a_res(model::GammaPhi,V,T,z) = a_res_activity(model.activity,V,T,z,model.fluid)
+
+function PT_property(model::GammaPhi,p,T,z,phase,threaded,vol0,f::F,USEP::Val{UseP}) where {F,UseP}
+    if is_unknown(phase) || phase == :stable
+        throw(error("automatic phase detection not implemented for $(typeof(model))"))
+    end
+
+    if is_vapour(phase)
+        #on gas phases, the activity is not present.
+        return PT_property(gas_model(model),p,T,z,phase,threaded,vol0,f,USEP)
+    elseif is_liquid(phase)
+        #for bulk properties that arent volume, the liquid_cp model contains a valid helmholtz model
+        V = volume(model.fluid.model, p, T, z; phase, threaded, vol0)
+        if UseP
+            return f(model,V,T,z,p)
+        else
+            return f(model,V,T,z)
+        end
+    else
+        throw(error("invalid phase specifier: $phase"))
+    end
+end
 
 function PTFlashWrapper(model::GammaPhi,p,T::Number,equilibrium::Symbol)
     fluidmodel = model.fluid
@@ -78,15 +96,15 @@ function PTFlashWrapper(model::GammaPhi,p,T::Number,equilibrium::Symbol)
         nan = zero(vv)/zero(vv)
         sats = fill((nan,nan,vv),length(model))
         ϕpure = fill(one(vv),length(model))
-        g_pure = [VT_gibbs_free_energy(__gas_model(pures[i]),vv,T) for i in 1:length(model)]
+        g_pure = [VT_gibbs_free_energy(gas_model(pures[i]),vv,T) for i in 1:length(model)]
         return PTFlashWrapper(model.components,model,sats,ϕpure,g_pure,equilibrium)
     else
         sats = saturation_pressure.(pures,T)
         vv_pure = last.(sats)
         p_pure = first.(sats)
-        μpure = only.(VT_chemical_potential_res.(__gas_model.(pures),vv_pure,T))
+        μpure = only.(VT_chemical_potential_res.(gas_model.(pures),vv_pure,T))
         ϕpure = exp.(μpure ./ RT .- log.(p_pure .* vv_pure ./ RT))
-        g_pure = [VT_gibbs_free_energy(__gas_model(pures[i]),vv_pure[i],T) for i in 1:length(model)]
+        g_pure = [VT_gibbs_free_energy(gas_model(pures[i]),vv_pure[i],T) for i in 1:length(model)]
         return PTFlashWrapper(model.components,model,sats,ϕpure,g_pure,equilibrium)
     end
 
@@ -123,7 +141,7 @@ function update_K!(lnK,wrapper::PTFlashWrapper{<:GammaPhi},p,T,x,y,volx,voly,pha
     end
 
     if is_vapour(phasey)
-        lnϕy, voly = lnϕ(__gas_model(fluidmodel), p, T, y; phase=phasey, vol0=voly)
+        lnϕy, voly = lnϕ(gas_model(fluidmodel), p, T, y; phase=phasey, vol0=voly)
         for i in eachindex(lnK)
             if iny[i]
                 ϕli = fug[i]
@@ -165,7 +183,7 @@ function __tpflash_gibbs_reduced(wrapper::PTFlashWrapper{<:GammaPhi},p,T,x,y,β,
     g_pure_x = dot(x,g_pures)
     gibbs = (g_E_x + g_ideal_x + g_pure_x)*(1-β)/RT
     if is_vle(eq)
-        gibbs += gibbs_free_energy(__gas_model(fluidmodel),p,T,y,phase =:v)*β/R̄/T
+        gibbs += gibbs_free_energy(gas_model(fluidmodel),p,T,y,phase =:v)*β/R̄/T
     else #lle
         γy = activity_coefficient(model.activity, p, T, y)
         g_E_y = sum(y[i]*RT*log(γy[i]) for i ∈ 1:n)
@@ -258,12 +276,12 @@ function _tpd_and_v!(fxy,model::GammaPhi,p,T,w,di,phase = :l)
 end
 
 function tpd_obj(model::GammaPhi, p, T, di, isliquid, cache = tpd_neq_cache(model,p,T,di,di), break_first = false)
-    vcache[] = one(eltype(di))
+    # vcache[] = one(eltype(di))
     function f(α)
         w = α .* α .* 0.25
         w ./= sum(w)
         γ = activity_coefficient(model.activity,p,T,w)
-        γ .= log(γ)
+        γ .= log.(γ)
         lnγw = γ
         fx = @sum(w[i]*(lnγw[i] + log(w[i]) - di[i])) - sum(w) + 1
     end

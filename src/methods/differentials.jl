@@ -7,10 +7,10 @@
 """
     ∂f∂T(model,V,T,z=SA[1.0])
 
-returns `f` and `∂f/∂T` at constant total volume and composition, where f is the total helmholtz energy, given by `eos(model,V,T,z)`
+returns `∂f/∂T` at constant total volume and composition, where f is the total helmholtz energy, given by `eos(model,V,T,z)`
 
 """
-function ∂f∂T(model,V,T,z=SA[1.0])
+function ∂f∂T(model,V,T,z)
     f(∂T) = eos(model,V,∂T,z)
     return Solvers.derivative(f,T)
 end
@@ -18,12 +18,12 @@ end
 """
     ∂f∂V(model,V,T,z)
 
-returns `f` and `∂f/∂V` at constant temperature and composition, where f is the total helmholtz energy, given by `eos(model,V,T,z)`, and V is the total volume
+returns `∂f/∂V` at constant temperature and composition, where f is the total helmholtz energy, given by `eos(model,V,T,z)`, and V is the total volume
 """
 function ∂f∂V(model,V,T,z)
     f(∂V) = a_res(model,∂V,T,z)
-    dadv = Solvers.derivative(f,V)
-    return Rgas(model)*T*(dadv - sum(z)/V)
+    ∂aᵣ∂V = Solvers.derivative(f,V)
+    sum(z)*Rgas(model)*T*(∂aᵣ∂V - 1/V)
 end
 
 #returns a tuple of the form ([∂f∂V,∂f∂T],f),using the least amount of computation
@@ -178,5 +178,26 @@ function ∂²³f(model,V,T,z=SA[1.0])
     _, ∂²A∂V², ∂³A∂V³ = Solvers.f∂f∂2f(f,V)
     return ∂²A∂V², ∂³A∂V³
 end
+
+"""
+    ∂²f∂T²(model,V,T,z=SA[1.0])
+
+returns `∂²A/∂T²` via Autodiff. Used mainly for ideal gas properties. It is recommended to overload this function for ideal models, as is equivalent to -Cv(T)/T
+
+"""
+function ∂²f∂T²(model,V,T,z)
+    A(x) = eos(model,V,x,z)
+    ∂A∂T(x) = Solvers.derivative(A,x)
+    ∂²A∂T²(x) = Solvers.derivative(∂A∂T,x)
+    return ∂²A∂T²(T)
+end
+
+function d2fdt2(model,V,T,z)
+    A(x) = eos(model,V,x,z)
+    ∂A∂T(x) = Solvers.derivative(A,x)
+    ∂²A∂T²(x) = Solvers.derivative(∂A∂T,x)
+    return ∂²A∂T²(T)
+end
+
 
 const _d23f = ∂²³f

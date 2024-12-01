@@ -18,7 +18,7 @@ function volume_compress(model,p,T,z=SA[1.0];V0=x0_volume(model,p,T,z,phase=:liq
 end
 
 function _volume_compress(model,_p,_T,_z=SA[1.0],V0=x0_volume(model,p,T,z,phase=:liquid),max_iters=100)
-    _0 = zero(Base.promote_eltype(model,_p,_T,_z))
+    _0 = zero(Base.promote_eltype(model,_p,_T,_z,V0))
     _1 = one(_0)
     isnan(V0) && return _0/_0
     p₀ = primalval(_1*_p)
@@ -29,6 +29,9 @@ function _volume_compress(model,_p,_T,_z=SA[1.0],V0=x0_volume(model,p,T,z,phase=
     logV0 = primalval(log(V0)*_1)
     z = primalval(_z)
     log_lb_v = log(primalval(lb_volume(model,T,z)))
+    if iszero(p₀) & (V0 == Inf) #ideal gas
+        return _1/_0
+    end
     function logstep(logVᵢ::TT) where TT
         logVᵢ < log_lb_v && return TT(zero(logVᵢ)/zero(logVᵢ))
         Vᵢ = exp(logVᵢ)
@@ -40,7 +43,8 @@ function _volume_compress(model,_p,_T,_z=SA[1.0],V0=x0_volume(model,p,T,z,phase=
         return TT(Δᵢ)
     end
     function f_fixpoint(logVᵢ::TT) where TT
-        return TT(logVᵢ + logstep(logVᵢ))
+        res = TT(logVᵢ + logstep(logVᵢ))
+        return res
     end
 
     logV = @nan(Solvers.fixpoint(f_fixpoint,logV0,Solvers.SSFixPoint(),rtol = 1e-12,max_iters=max_iters)::XX,nan)
@@ -177,8 +181,13 @@ function _volume(model::EoSModel,p,T,z=SA[1.0],phase=:unknown, threaded=true,vol
     return volume_impl(model,p,T,z,phase,threaded,vol0)
 end
 
+#comprises solid and liquid phases.
+#the separation is done because we normally we use a combined liquid-gas model for most calculations.
 fluid_model(model) = model
+#just solid models.
 solid_model(model) = model
+liquid_model(model) = fluid_model(model)
+gas_model(model) = fluid_model(model)
 
 volume_impl(model,p,T) = volume_impl(model,p,T,SA[1.0],:unknown,true,nothing)
 volume_impl(model,p,T,z) = volume_impl(model,p,T,z,:unknown,true,nothing)
@@ -192,7 +201,7 @@ end
 function default_volume_impl(model::EoSModel,p,T,z=SA[1.0],phase=:unknown, threaded=true,vol0=nothing)
 #Threaded version
     check_arraysize(model,z)
-    TYPE = typeof(p+T+first(z)+oneunit(eltype(model)))
+    TYPE = Base.promote_eltype(model,p,T,z)
     nan = zero(TYPE)/zero(TYPE)
     #err() = @error("model $model Failed to converge to a volume root at pressure p = $p [Pa], T = $T [K] and compositions = $z")
     fluid = fluid_model(model)
@@ -212,7 +221,7 @@ function default_volume_impl(model::EoSModel,p,T,z=SA[1.0],phase=:unknown, threa
         end
     end
 
-    if phase != :unknown && phase != :stable
+    if !is_unknown(phase) && phase != :stable
         V0 = x0_volume(model,p,T,z,phase=phase)
         if is_solid(phase)
             V = _volume_compress(solid,p,T,z,V0)
@@ -221,6 +230,13 @@ function default_volume_impl(model::EoSModel,p,T,z=SA[1.0],phase=:unknown, threa
         end
         return V
     end
+
+    #at this point we are sure that we don't know the phase and we weren't being asked by a particular phase or initial point
+    #return ideal gas (V = Inf)
+    if iszero(p)
+        return one(TYPE)/zero(TYPE)
+    end
+
     Vg0 = x0_volume(fluid,p,T,z,phase=:v)
     Vl0 = x0_volume(fluid,p,T,z,phase=:l)
     Vs0 = x0_volume_solid(solid,T,z) #Needs to be const-propagated.
@@ -254,7 +270,6 @@ function default_volume_impl(model::EoSModel,p,T,z=SA[1.0],phase=:unknown, threa
         Vs = _volume_compress(solid,p,T,z,Vs0)
         volumes = (Vg,Vl,Vs)
     end
-    
     idx,v,g = volume_label((fluid,fluid,solid),p,T,z,volumes)
     if phase == :stable
         !VT_isstable(model,v,T,z,false) && return nan
@@ -267,13 +282,12 @@ function volume_label(models::F,p,T,z,vols) where F
         isnan(fV) && return one(fV)/zero(fV)
         f(V) = eos(model,V,T,z)
         _f,_dV = Solvers.f∂f(f,fV)
+        #for the ideal gas case, p*V == 0, so the result reduces to eos(model,V,T,z)
+        fV == Inf && iszero(_dV) && return _f
         return ifelse(abs((p+_dV)/p) > 0.03,one(fV)/zero(fV),_f + p*fV)
     end
-
     idx = 0
-    V = p
-    model = models[1]
-    _0 = zero(@f(Base.promote_eltype))
+    _0 = zero(Base.promote_eltype(models[1],p,T,z))
     g = one(_0)/_0
     v = _0/_0
     for (i,vi) in pairs(vols)
@@ -299,6 +313,8 @@ function _label_and_volumes(model::EoSModel,cond)
         isnan(fV) && return one(fV)/zero(fV)
         _df,_f = ∂f(model,fV,T,z)
         dV,_ = _df
+        #for the ideal gas case, p*V == 0, so the result reduces to eos(model,V,T,z)
+        fV == Inf && iszero(dV) && return _f
         return ifelse(abs((p+dV)/p) > 0.03,zero(dV)/one(dV),_f + p*fV)
     end
     isnan(Vl) && return 1,Vv,Vv #could not converge on gas volume, assuming stable liquid phase

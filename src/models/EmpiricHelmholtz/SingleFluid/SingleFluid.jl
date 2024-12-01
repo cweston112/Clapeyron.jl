@@ -1,7 +1,7 @@
 
 include("structs.jl")
 
-const EmpiricAncillary = CompositeModel{FluidCorrelation{PolExpVapour, PolExpLiquid, PolExpSat}, Nothing}
+const EmpiricAncillary = CompositeModel{FluidCorrelation{PolExpVapour, PolExpLiquid, PolExpSat, Nothing}, Nothing}
 #term dispatch. function definitions are in term_functions.jl
 
 function a_term(term::NonAnalyticTerm,δ,τ,lnδ,lnτ,_0)
@@ -61,6 +61,9 @@ struct SingleFluidIdeal <: IdealModel
     references::Vector{String}
 end
 
+is_splittable(model::SingleFluid) = false
+is_splittable(model::SingleFluidIdeal) = false
+
 function recombine_impl!(model::SingleFluid)
     _calc_iterators!(model.residual)
     return model
@@ -72,8 +75,8 @@ end
 
 idealmodel(model::SingleFluid) = SingleFluidIdeal(model)
 
-R_gas(model::SingleFluid) = model.properties.Rgas
-R_gas(model::SingleFluidIdeal) = model.properties.Rgas
+Rgas(model::SingleFluid) = model.properties.Rgas
+Rgas(model::SingleFluidIdeal) = model.properties.Rgas
 
 reduced_a_ideal(model::SingleFluid,τ) = reduced_a_ideal(model.ideal,τ)
 reduced_a_ideal(model::SingleFluidIdeal,τ) = reduced_a_ideal(model.ideal,τ)
@@ -183,8 +186,8 @@ function __set_Rgas(pure,Rgas)
 end
 
 function a_ideal(model::SingleFluidIdeal,V,T,z=SA[1.],k = __get_k_alpha0(model))
-    Tc = model.properties.Tc
-    rhoc = model.properties.rhoc
+    Tc = model.properties.Tr
+    rhoc = model.properties.rhor
     N = sum(z)
     τ = Tc/T
     α0 = reduced_a_ideal(model,τ)
@@ -193,14 +196,14 @@ function a_ideal(model::SingleFluidIdeal,V,T,z=SA[1.],k = __get_k_alpha0(model))
     return k*α0 + logδ
 end
 
-v_scale(model::SingleFluid,z = SA[1.0],∑z = sum(z)) = 1/∑z/model.properties.rhoc
-v_scale(model::SingleFluidIdeal,z = SA[1.0],∑z = sum(z)) = 1/∑z/model.properties.rhoc
+v_scale(model::SingleFluid,z = SA[1.0],∑z = sum(z)) = 1/∑z/model.properties.rhor
+v_scale(model::SingleFluidIdeal,z = SA[1.0],∑z = sum(z)) = 1/∑z/model.properties.rhor
 
 a_ideal(model::SingleFluid,V,T,z=SA[1.]) = a_ideal(idealmodel(model),V,T,z)
 
 function a_res(model::SingleFluid,V,T,z=SA[1.])
-    Tc = model.properties.Tc
-    rhoc = model.properties.rhoc
+    Tc = model.properties.Tr
+    rhoc = model.properties.rhor
     N = sum(z)
     δ = N/(rhoc*V)
     τ = Tc/T
@@ -208,9 +211,9 @@ function a_res(model::SingleFluid,V,T,z=SA[1.])
 end
 
 function eos_impl(model::SingleFluid, V, T, z)
-    R = R_gas(model)
-    Tc = model.properties.Tc
-    rhoc = model.properties.rhoc
+    R = Rgas(model)
+    Tc = model.properties.Tr
+    rhoc = model.properties.rhor
     N = sum(z)
     δ = N/(rhoc*V)
     τ = Tc/T
@@ -221,19 +224,7 @@ function eos_impl(model::SingleFluid, V, T, z)
     return N*R*T*(logδ + k*reduced_a_ideal(model,τ) + reduced_a_res(model,δ,τ,logδ)) + N*(a0 + a1*T)
 end
 
-function eos_res(model::SingleFluid,V,T,z=SA[1.0])
-    R = R_gas(model)
-    Tc = model.properties.Tc
-    rhoc = model.properties.rhoc
-    N = sum(z)
-    δ = N/(rhoc*V)
-    τ = Tc/T
-    return N*R*T*reduced_a_res(model,δ,τ)
-end
-
 mw(model::SingleFluid) = SA[model.properties.Mw]
-
-molecular_weight(model::SingleFluid,z = @SVector [1.]) = model.properties.Mw*0.001
 
 T_scale(model::SingleFluid,z) = model.properties.Tc
 
@@ -252,6 +243,7 @@ function Base.show(io::IO,mime::MIME"text/plain",model::SingleFluidIdeal)
     println(io,"Ideal MultiParameter Equation of state for $(model.components[1]):")
     show_multiparameter_coeffs(io,model.ideal)
 end
+has_fast_crit_pure(model::SingleFluid) = true
 
 function x0_sat_pure(model::SingleFluid,T)
     z=SA[1.0]

@@ -3,8 +3,7 @@ function rachfordrice(K, z; β0=nothing, non_inx=FillArrays.Fill(false,length(z)
     β,singlephase,limits = rachfordrice_β0(K,z,β0)
     if length(z) <= 3 && all(Base.Fix2(>,0),z) && all(!,non_inx) && all(!,non_iny) && !singlephase
         return rr_vle_vapor_fraction_exact(K,z)
-    end
-
+    end  
     #halley refinement
     if !singlephase
         return rr_flash_refine(K,z,β,non_inx,non_iny,limits)
@@ -98,8 +97,16 @@ end
 
 #updates lnK, returns lnK,volx,voly, gibbs if β != nothing
 function update_K!(lnK,model,p,T,x,y,volx,voly,phasex,phasey,β = nothing,inx = FillArrays.Fill(true,length(x)),iny = inx)
-    lnϕx, volx = lnϕ(model, p, T, x; phase=phasex, vol0=volx)
+    lnϕx, volx = lnϕ(model, p, T, x; phase=:liquid, vol0=volx)
     lnϕy, voly = lnϕ(model, p, T, y; phase=phasey, vol0=voly)
+    if isnan(volx)
+        lnϕx, volx = lnϕ(model, p, T, x, phase = phasex)
+    end
+
+    if isnan(voly)
+        lnϕy, voly = lnϕ(model, p, T, y, phase = phasey)
+    end
+
     lnK .= lnϕx - lnϕy
     gibbs = zero(eltype(lnK))
     if β !== nothing
@@ -148,6 +155,112 @@ function tp_flash_K0(model,p,T)
         psat = first.(sat_x)
         return psat ./ p
     end
+end
+
+function pt_flash_x0(model,p,T,n,method::FlashMethod,inx = FillArrays.Fill(true,length(model)),iny = inx,non_inx = FillArrays.Fill(false,length(model)),non_iny = non_inx;k0 = :wilson)
+    ∑n = sum(n)
+    z = n/∑n
+    
+    if is_vle(method)
+        phasex = :liquid
+        phasey = :vapor
+    elseif is_lle(method)
+        phasex = :liquid
+        phasey = :liquid
+    else
+        phasex = :unknown
+        phasey = :unknown
+    end
+
+    nc = length(model)
+    _1 = oneunit(Base.promote_eltype(model,p,T,z))
+    x,y = fill(_1,nc),fill(_1,nc)
+    x .= z
+    y .= z
+    if !isnothing(method.K0)
+        K = _1 * K0
+        lnK = log.(K)
+        volx = zero(_1)
+        voly = zero(_1)
+    elseif !isnothing(method.x0) && !isnothing(method.y0)
+        x = method.x0 ./ sum(method.x0)
+        y = method.y0 ./ sum(method.y0)
+        lnK = log.(x ./ y)
+        volx = zero(_1)
+        voly = zero(_1)
+        if method.v0 == nothing
+            lnK,volx,voly,_ = update_K!(lnK,model,p,T,x,y,nothing,nothing,phasex,phasey,nothing,inx,iny)
+        else
+            vl0,vv0 = method.v0
+            lnK,volx,voly,_ = update_K!(lnK,model,p,T,x,y,vl0,vv0,phasex,phasey,nothing,inx,iny)
+        end
+        K = exp.(lnK)
+    elseif is_vle(method) || is_unknown(method) && k0 == :wilson
+        # Wilson Correlation for K
+        K = tp_flash_K0(model,p,T)
+        #if we can't predict K, we use lle
+        if is_unknown(method)
+            Kmin,Kmax = extrema(K)
+
+            if Kmin >= 1 || Kmax <= 1
+                K = K0_lle_init(model,p,T,z)
+            end
+        end
+        lnK = log.(K)
+        volx = zero(_1)
+        voly = zero(_1)
+       # volx,voly = NaN*_1,NaN*_1
+    elseif is_vle(method) || is_unknown(method)
+        K = suggest_K(model,p,T,z)
+        lnK = log.(K)
+        volx = zero(_1)
+        voly = zero(_1)
+    else
+        K = K0_lle_init(model,p,T,z)
+        lnK = log.(K)
+        volx = zero(_1)
+        voly = zero(_1)
+    end
+    β,singlephase,_ = rachfordrice_β0(K,z)
+
+    #if singlephase == true, maybe initial K values overshoot the actual phase split.
+    if singlephase
+        Kmin,Kmax = extrema(K)
+        if !(Kmin >= 1 || Kmax <= 1)
+            #valid K, still single phase.
+            g0 = dot(z, K) - 1. #rachford rice, supposing β = 0
+            g1 = 1. - sum(zi/Ki for (zi,Ki) in zip(z,K)) #rachford rice, supposing β = 1
+            if g0 <= 0 && g1 < 0 #bubble point.
+                β = eps(typeof(β))
+                singlephase = false
+            elseif g0 > 0 && g1 >= 0 #dew point
+                β = one(β) - eps(typeof(β))
+                singlephase = false
+            end
+        end
+    else
+        β = rachfordrice(K, z; β0=β, non_inx=non_inx, non_iny=non_iny)
+    end
+    if β > 1
+        β = one(β)
+    elseif β < 0
+        β = zero(β)
+    end
+    y = rr_flash_vapor!(y,K,z,β)
+    y ./= sum(y)
+    x = rr_flash_liquid!(x,K,z,β)
+    x ./= sum(x)
+    βv = ∑n*β
+    βl = ∑n - βv
+    comps0 = [x,y]
+    if !isnothing(method.v0) && iszero(volx) && iszero(voly)
+        vl0,vv0 = method.v0
+        volx,voly = _1*vl0,_1*vv0
+    end
+    iszero(volx) && (volx = volume(model,p,T,x,phase = phasex))
+    iszero(voly) && (voly = volume(model,p,T,y,phase = phasey))
+    r = FlashResult(p,T,SA[x,y],SA[βl,βv],SA[volx,voly],sort = false)
+    return r
 end
 
 tp_flash_K0!(K,model,p,T) = wilson_k_values!(K,model,p,T)

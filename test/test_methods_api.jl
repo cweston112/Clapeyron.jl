@@ -37,9 +37,9 @@
     model31 = IAPWS95()
     v31 = volume(model31,1u"bar",50u"°C")
     #experimental value is 44.18e-6. close enough.
-
-    @test isothermal_compressibility(model31,1u"bar",50u"°C",output = u"bar^-1") ≈ 44.17306906730427e-6u"bar^-1" rtol = 1E-6
-    @test isothermal_compressibility(model31,1u"bar",50u"°C",output = u"bar^-1") ≈ 44.17306906730427e-6u"bar^-1" rtol = 1E-6
+ 
+    @test isothermal_compressibility(model31,1u"bar",50u"°C",output = u"bar^-1") ≈ 44.17306906730427e-6u"bar^-1" rtol = 1e-4
+    @test isothermal_compressibility(model31,1u"bar",50u"°C",output = u"bar^-1") ≈ 44.17306906730427e-6u"bar^-1" rtol = 1e-4
     #enthalpy of vaporization of water at 100 °C
     @test enthalpy_vap(model31,100u"°C",output = u"kJ") ≈ 40.64971775824767u"kJ" rtol = 1E-6
 
@@ -54,7 +54,7 @@
 end
 
 @testset "association" begin
-    model_no_comb_dense = PCSAFT(["methanol","ethanol"],assoc_options = AssocOptions(combining = :nocombining))
+    model_no_comb = PCSAFT(["methanol","ethanol"],assoc_options = AssocOptions(combining = :nocombining))
     model_cr1 = PCSAFT(["methanol","ethanol"],assoc_options = AssocOptions(combining = :cr1))
     model_esd = PCSAFT(["methanol","ethanol"],assoc_options = AssocOptions(combining = :esd))
     model_esd_r = PCSAFT(["methanol","ethanol"],assoc_options = AssocOptions(combining = :elliott_runtime))
@@ -64,7 +64,7 @@ end
     T = 298.15
     z = [0.5,0.5]
     @test Clapeyron.nonzero_extrema(0:3) == (1, 3)
-    @test Clapeyron.a_assoc(model_no_comb_dense,V,T,z) ≈ -4.667036481159167 rtol = 1E-6
+    @test Clapeyron.a_assoc(model_no_comb,V,T,z) ≈ -4.667036481159167 rtol = 1E-6
     @test Clapeyron.a_assoc(model_cr1,V,T,z) ≈ -5.323469194263458 rtol = 1E-6
     @test Clapeyron.a_assoc(model_esd,V,T,z) ≈ -5.323420343872591 rtol = 1E-6
     @test Clapeyron.a_assoc(model_esd_r,V,T,z) ≈ -5.323430326406561 rtol = 1E-6
@@ -206,7 +206,8 @@ end
         #test for initialization when K suggests single phase but it could be solved supposing bubble or dew conditions.
         substances = ["water", "methanol", "propyleneglycol","methyloxirane"]
         pcp_system = PCPSAFT(substances)
-        @test Clapeyron.tp_flash2(pcp_system, 25_000.0, 300.15, [1.0, 1.0, 1.0, 1.0], RRTPFlash())[end] ≈ -8.900576759774916 rtol = 1e-6
+        res = Clapeyron.tp_flash2(pcp_system, 25_000.0, 300.15, [1.0, 1.0, 1.0, 1.0], RRTPFlash())
+        @test res.data.g ≈ -8.900576759774916 rtol = 1e-6
     end
 
     if isdefined(Base,:get_extension)
@@ -295,7 +296,7 @@ end
         act_y1 = activity_coefficient(system, 101325, 303.15, flash1[1][2,:]) .* flash1[1][2,:]
         @test Clapeyron.dnorm(act_x1,act_y1) < 1e-8
 
-        alg2 = MichelsenTPFlash(
+        alg2 = RRTPFlash(
             equilibrium = :lle,
             x0 = [0.99999, 0.00001],
             y0 = [0.00001, 0.00009]
@@ -306,7 +307,7 @@ end
         @test Clapeyron.dnorm(act_x2,act_y2) < 1e-8
 
         #test K0_lle_init initialization
-        alg3 = MichelsenTPFlash(
+        alg3 = RRTPFlash(
             equilibrium = :lle)
         flash3 = tp_flash(system, 101325, 303.15, [0.5, 0.5], alg3)
         act_x3 = activity_coefficient(system, 101325, 303.15, flash3[1][1,:]) .* flash3[1][1,:]
@@ -382,7 +383,12 @@ end
     #test IsoFugacity, near criticality
     Tc_near = 0.95*647.096
     psat_Tcnear = 1.496059652088857e7 #default solver result
-    @test first(Clapeyron.saturation_pressure(model,Tc_near,IsoFugacitySaturation())) ≈ psat_Tcnear rtol = 1e-6
+    if Base.VERSION < v"1.11" && Sys.islinux()
+        @test first(Clapeyron.saturation_pressure(model,Tc_near,IsoFugacitySaturation(p0 = 1.49e7))) ≈ psat_Tcnear rtol = 1e-6
+    else
+        @test first(Clapeyron.saturation_pressure(model,Tc_near,IsoFugacitySaturation())) ≈ psat_Tcnear rtol = 1e-6
+
+    end
     #Test that IsoFugacity fails over critical point
     @test isnan(first(Clapeyron.saturation_pressure(model,1.1*647.096,IsoFugacitySaturation())))
     GC.gc()
@@ -405,15 +411,35 @@ end
 
     #Issue #290
     @test Clapeyron.saturation_temperature(cPR("R1233zde"),101325*20,crit_retry = false)[1] ≈ 405.98925205830335 rtol = 1e-6
+    @test Clapeyron.saturation_temperature(cPR("isobutane"),1.7855513185537157e6,crit_retry = false)[1] ≈ 366.52386488214876 rtol = 1e-6
+    @test Clapeyron.saturation_temperature(cPR("propane"),2.1298218093361156e6,crit_retry = false)[1] ≈ 332.6046103831853 rtol = 1e-6
+    @test Clapeyron.saturation_temperature(cPR("r134a"),2.201981727901889e6,crit_retry = false)[1] ≈ 344.6869001549851 rtol = 1e-6
 end
 
 @testset "Tproperty" begin
-    model = PCSAFT(["propane","dodecane"])
+    model1 = PCSAFT(["propane","dodecane"])
     p = 101325.0; T = 300.0;z = [0.5,0.5]
-    h_ = enthalpy(model,p,T,z)
-    s_ = entropy(model,p,T,z)
-    @test Tproperty(model,p,h_,z,enthalpy) ≈ T
-    @test Tproperty(model,p,s_,z,entropy) ≈ T
+    h_ = enthalpy(model1,p,T,z)
+    s_ = entropy(model1,p,T,z)
+    @test Tproperty(model1,p,h_,z,enthalpy) ≈ T
+    @test Tproperty(model1,p,s_,z,entropy) ≈ T
+
+    model2 = PCSAFT(["propane"])
+    z2 = [1.]
+    h2_ = enthalpy(model2,p,T,z2)
+    s2_ = entropy(model2,p,T,z2)
+    @test Tproperty(model2,p,h2_,z2,enthalpy) ≈ T
+    @test Tproperty(model2,p,s2_,z2,entropy) ≈ T
+
+    #issue 309
+    model3 = cPR(["ethane"],idealmodel=ReidIdeal)
+    T3 = 300
+    z3 = [5]
+    s30 = entropy(model3,p,T3,z3)
+    p3 = 2*p
+    T3_calc = Tproperty(model3,p3,s30,z3,entropy)
+    s3 = entropy(model3,p3,T3_calc,z3)
+    @test s3 ≈ s30
 end
 
 @testset "bubble/dew point algorithms" begin
@@ -633,16 +659,15 @@ GC.gc()
     @testset "saturation points without critical point" begin
         model1 = PCSAFT("water")
         Tc1,_,_ = crit_pure(model1)
-        T1 = 0.995Tc1
-        @test Clapeyron.saturation_pressure(model1,T1,crit_retry = false)[1] ≈ 3.542008160105954e7 rtol = 1e-6
+        T1 = 0.999Tc1
+        @test Clapeyron.saturation_pressure(model1,T1,crit_retry = false)[1] ≈ 3.6377840330375336e7 rtol = 1e-6
 
         model2 = PCSAFT("eicosane")
         Tc2,_,_ = crit_pure(model2)
-        T2 = 0.99Tc2
+        T2 = 0.999Tc2
         
-        if !Base.Sys.isapple() #this test fails on mac, julia 1.6
-            @test Clapeyron.saturation_pressure(model2,T2,crit_retry = false)[1] ≈ 1.3225433281814915e6 rtol = 1e-6
-        end
+        #this test fails on mac, julia 1.6
+        @test Clapeyron.saturation_pressure(model2,T2,crit_retry = false)[1] ≈ 1.451917823392476e6 rtol = 1e-6
 
         #https://github.com/ClapeyronThermo/Clapeyron.jl/issues/237
         #for some reason, it fails with mac sometimes

@@ -3,6 +3,7 @@ struct CompositeModel{𝔽,𝕊} <: EoSModel
     components::Vector{String}
     fluid::𝔽
     solid::𝕊
+    mapping::Union{Vector{Pair{Vector{Tuple{String,Int64}},Tuple{String,Int64}}},Nothing}
 end
 =#
 
@@ -87,6 +88,7 @@ include("GammaPhi.jl")
 include("GenericAncEvaluator.jl")
 include("SaturationModel/SaturationModel.jl")
 include("LiquidVolumeModel/LiquidVolumeModel.jl")
+#include("LiquidCpModel/LiquidCpModel.jl")
 include("PolExpVapour.jl")
 include("SolidModel/SolidHfus.jl")
 include("SolidModel/SolidKs.jl")
@@ -135,7 +137,8 @@ function CompositeModel(components ;
     saturation_userlocations = String[],
     melting_userlocations = String[],
     sublimation_userlocations = String[],
-    verbose = false)
+    verbose = false,
+    reference_state = nothing)
 
     _components = format_components(components)
     #take care of the solid phase first
@@ -161,7 +164,7 @@ function CompositeModel(components ;
         init_gas = init_model(gas,components,gas_userlocations,verbose)
         init_liquid = init_model(liquid,components,liquid_userlocations,verbose)
         init_sat = init_model(saturation,components,saturation_userlocations,verbose)
-        init_fluid = FluidCorrelation(_components,init_gas,init_liquid,init_sat)
+        init_fluid = FluidCorrelation(_components,init_gas,init_liquid,init_sat,nothing)
     elseif !isnothing(_fluid) && !isnothing(liquid) && (gas == saturation == nothing)
         #case 3: liquid activity and a model for the fluid.
         init_liquid = init_model_act(liquid,components,liquid_userlocations,verbose)
@@ -177,7 +180,7 @@ function CompositeModel(components ;
             #case 3.b, one alternative is to leave this as an error.
             init_gas = _fluid
             init_sat = _fluid
-            init_fluid = FluidCorrelation(_components,init_gas,init_liquid,init_sat)
+            init_fluid = FluidCorrelation(_components,init_gas,init_liquid,init_sat,nothing)
         end
     elseif !isnothing(liquid) && (fluid == gas == saturation == nothing)
     #legacy case, maybe we are constructing an activity that has a puremodel
@@ -211,8 +214,12 @@ function CompositeModel(components ;
             end
         end
     end
-    return CompositeModel(_components,init_fluid,init_solid,_mapping)
+    model = CompositeModel(_components,init_fluid,init_solid,_mapping)
+    #set_reference_state!(model,verbose = verbose)
+    return model
 end
+
+#reference_state(model::CompositeModel) = reference_state(model.fluid)
 
 function Base.show(io::IO,mime::MIME"text/plain",model::CompositeModel)
     fluid = model.fluid
@@ -250,15 +257,7 @@ function Base.show(io::IO,mime::MIME"text/plain",model::CompositeModel)
     end
 end
 
-"""
-    __gas_model(model::EoSModel)
 
-internal function.
-provides the model used to calculate gas properties.
-normally, this is the identity, but `CompositeModel` has a gas model by itself.
-"""
-__gas_model(model::EoSModel) = model
-__gas_model(model::CompositeModel) = model.fluid
 fluid_model(model::CompositeModel) = model.fluid
 solid_model(model::CompositeModel) = model.solid
 
@@ -286,6 +285,30 @@ function volume_impl(model::CompositeModel,p,T,z,phase,threaded,vol0)
     end
 end
 
+#dispatcher for bulk properties
+function PT_property(model::CompositeModel,p,T,z,phase,threaded,vol0,f::F,USEP::Val{UseP}) where {F,UseP}
+    
+    if !(model.fluid isa RestrictedEquilibriaModel) && model.solid === nothing
+        return PT_property(fluid_model(model),p,T,z,phase,threaded,vol0,f,USEP)
+    end
+    
+    if !(model.solid isa RestrictedEquilibriaModel) && model.fluid === nothing
+        return PT_property(solid,p,T,z,phase,threaded,vol0,f,USEP)
+    end
+
+    if is_unknown(phase) || phase == :stable
+        throw(error("automatic phase detection not implemented for $(typeof(model))"))
+    end
+
+    if is_liquid(phase) || is_vapour(phase)
+        return PT_property(fluid_model(model),p,T,z,phase,threaded,vol0,f,USEP)
+    elseif is_solid(phase)
+        return PT_property(solid_model(model),p,T,z,phase,threaded,vol0,f,USEP)
+    else
+        throw(error("invalid phase specifier: $phase"))
+    end
+end
+
 function activity_coefficient(model::CompositeModel,p,T,z=SA[1.];
                             μ_ref = nothing,
                             reference = :pure,
@@ -297,27 +320,7 @@ end
 
 reference_chemical_potential_type(model::CompositeModel) = reference_chemical_potential_type(model.fluid)
 
-function init_preferred_method(method::typeof(saturation_pressure),model::CompositeModel,kwargs)
-    return init_preferred_method(saturation_pressure,model.fluid,kwargs)
-end
-
-function init_preferred_method(method::typeof(saturation_temperature),model::CompositeModel,kwargs)
-    return init_preferred_method(saturation_temperature,model.fluid,kwargs)
-end
-
-function saturation_pressure(model::CompositeModel,T,method::SaturationMethod)
-    return saturation_pressure(model.fluid,T,method)
-end
-
-crit_pure(model::CompositeModel) = crit_pure(model.fluid)
-
-x0_sat_pure(model::CompositeModel,T) = x0_sat_pure(model.fluid)
-
-x0_psat(model::CompositeModel,T) = x0_psat(model.fluid,T)
-
-function saturation_temperature(model::CompositeModel,p,method::SaturationMethod)
-    return saturation_temperature(model.fluid,p,method)
-end
+saturation_model(model::CompositeModel) = model.fluid
 
 #defer bubbledew eq to the fluid field
 
@@ -376,6 +379,5 @@ function gibbs_solvation(model::CompositeModel,T)
     binary_component_check(gibbs_solvation,model)
     return gibbs_solvation(model.fluid,T)
 end
-
 
 export CompositeModel
