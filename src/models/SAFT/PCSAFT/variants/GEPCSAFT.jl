@@ -90,7 +90,7 @@ function _pcsaft(model::GEPCSAFT{I,T}) where {I,T}
     return PCSAFT{I,T}(model.components,model.sites,model.params,model.idealmodel,model.assoc_options,model.references)
 end
 
-function a_res(model::GEPCSAFTModel, V, T, z)    
+function a_res(model::GEPCSAFTModel, V, T, z, )    
     _data = @f(data)
     return @f(a_hc,_data) + @f(a_disp,_data) + @f(a_assoc,_data)
 end

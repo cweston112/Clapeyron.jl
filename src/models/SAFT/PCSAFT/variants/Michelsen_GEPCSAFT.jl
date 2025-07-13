@@ -175,6 +175,7 @@ function m2ϵσ3(model::AdvGEPCSAFTModel, V, T, z, _data=@f(data))
     A, B = A/Σz, B/Σz
     gₑ = excess_gibbs_free_energy(model.activity,V,T,z)/(R̄*T*Σz)
     
+    
     q̄ = gₑ/7 + (log(b̄) - B) +  A
     ᾱ = α_mix(q̄/m̄, m̄)
     # println("g_E/RT = ", gₑ)
@@ -188,3 +189,4 @@ function m2ϵσ3(model::AdvGEPCSAFTModel, V, T, z, _data=@f(data))
 
     return m2ϵσ3₁, m2ϵσ3₂
 end
+

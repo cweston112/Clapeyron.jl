@@ -122,7 +122,7 @@ end
 function m2ϵσ3(model::AltAdvGEPCSAFTModel, V, T, z, _data=@f(data))
 
     function q_i(α, m)
-        c = [2*4.140090253547626, 2*5.917154444564794*0.8549524961776253*log(m) - 2*0.8549524961776253(log(m))^2 + 2*−11.842506926061144, 1.0622160636835105] 
+        c = [-1, -3.312911261372218, (log(m) + -2.26053639783524) * (4.373514008544666 - log(m)^2 * -0.5438472133955807 - 2.7803145680981665*log(m))]
 
         # c = [2.4943621118539628*(log(b))^2 + 317.1749262783832*log(b) + 10067.759452498541, 8.066923060464152*(log(b))^2 + 1065.837604157669*log(b) + 35238.98020488654]
         # return c[1]*α + c[2]
@@ -130,7 +130,7 @@ function m2ϵσ3(model::AltAdvGEPCSAFTModel, V, T, z, _data=@f(data))
     end
 
     function α_mix(q̄,m̄)
-        c = [2*4.140090253547626, 2*5.917154444564794*0.8549524961776253*log(m̄) - 2*0.8549524961776253(log(m̄))^2 + 2*−11.842506926061144, 1.0622160636835105 - q̄] 
+        c = [-1, -3.312911261372218, (log(m̄) + -2.26053639783524) * (4.373514008544666 - log(m̄)^2 * -0.5438472133955807 - 2.7803145680981665*log(m̄))- q̄]
         # c = [2.4943621118539628*(log(b̄))^2 + 317.1749262783832*log(b̄) + 10067.759452498541, 8.066923060464152*(log(b̄))^2 + 1065.837604157669*log(b̄) + 35238.98020488654]
         
         # We have to solve the equation q(α, b) = q̄ 
@@ -173,11 +173,19 @@ function m2ϵσ3(model::AltAdvGEPCSAFTModel, V, T, z, _data=@f(data))
     end
     m²σ³,b̄ = m²σ³/Σz,b̄/Σz
     A, B = A/Σz, B/Σz
-    p = pressure(PCSAFT(model.components), V, T, z)
-    T_sat,_,_,_ = bubble_temperature(model.activity, p, z)
-    gₑ = excess_gibbs_free_energy(model.activity,V,T_sat,z)/(R̄*T*Σz)
+
+    function correction(model, V, T, z, B, A, _data = @f(data))
+        if sum([z[i]^2 for i ∈ eachindex(z)]) == 1 return 0 end
+        n_model = Clapeyron._pcsaft(model)
+        p = Clapeyron.pressure(n_model, V, T, z)
+        g_res = gibbs_energy_res(n_model, p, T, z)/(R̄*T*Σz)
+        g_e = excess(n_model,p,T,z, gibbs_free_energy)/(R̄*T*Σz)
+        return g_res - g_e - A + B
+    end
+
+    gₑ = excess_gibbs_free_energy(model.activity,V,T,z)/(R̄*T*Σz)
     
-    q̄ = gₑ + (log(b̄) - B) +  A
+    q̄ = gₑ + (log(b̄) - B) +  A + correction(model, V, T, z, B, A)
     ᾱ = α_mix(q̄/m̄, m̄)
     # println("g_E/RT = ", gₑ)
     # println("log( b̄ ) = ", log(b̄))
