@@ -1,7 +1,7 @@
 name = "Clapeyron"
 uuid = "7c7805af-46cc-48c9-995b-ed0ed2dc909a"
-authors = ["Hon Wa Yew <yewhonwa@gmail.com>", "Pierre Walker <pjwalker@caltech.edu>", "Andrés Riedemann <andres.riedemann@gmail.com>"]
 version = "0.6.14"
+authors = ["Hon Wa Yew <yewhonwa@gmail.com>", "Pierre Walker <pjwalker@caltech.edu>", "Andrés Riedemann <andres.riedemann@gmail.com>"]
 
 [deps]
 BlackBoxOptim = "a134a8b2-14d6-55f6-9291-3336d3ab0209"
@@ -57,7 +57,7 @@ EoSSuperancillaries = "1.2.3"
 FillArrays = "^0.12, 0.13, 1"
 ForwardDiff = "0.10.36,1"
 JSON3 = "1"
-JutulDarcy = "0.2"
+JutulDarcy = "0.2, 0.3"
 LinearAlgebra = "1"
 LogExpFunctions = "^0.3.24"
 Metaheuristics = "2, 3"
